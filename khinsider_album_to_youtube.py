@@ -218,26 +218,46 @@ def safe_track_file(index: int, suffix: str) -> str:
     return f"track_{index:04d}{suffix}"
 
 
-def ffprobe_duration(path: pathlib.Path) -> float:
+def ffprobe_audio_duration(path: pathlib.Path) -> float:
+    """Return real audio duration by summing packet durations.
+
+    Do not use ``format=duration`` for raw ADTS AAC. Raw AAC has no container
+    timeline, so ffprobe may estimate its duration from bitrate and can be wildly
+    wrong for some files. Packet durations come from the actual audio frames.
+    """
     command = [
         "ffprobe",
         "-v",
         "error",
+        "-select_streams",
+        "a:0",
         "-show_entries",
-        "format=duration",
+        "packet=duration_time",
         "-of",
-        "default=noprint_wrappers=1:nokey=1",
+        "csv=p=0",
         str(path),
     ]
     result = subprocess.run(command, check=True, capture_output=True, text=True)
-    try:
-        duration = float(result.stdout.strip())
-    except ValueError as error:
-        raise RuntimeError(f"ffprobe returned an invalid duration for {path}: {result.stdout!r}") from error
 
-    if duration <= 0:
-        raise RuntimeError(f"Invalid duration for {path}: {duration}")
-    return duration
+    total = 0.0
+    packet_count = 0
+
+    for line in result.stdout.splitlines():
+        value = line.split(",", 1)[0].strip()
+        if not value or value.upper() == "N/A":
+            continue
+        try:
+            duration = float(value)
+        except ValueError:
+            continue
+        if duration > 0:
+            total += duration
+            packet_count += 1
+
+    if packet_count == 0 or total <= 0:
+        raise RuntimeError(f"Could not determine audio packet duration for {path}.")
+
+    return total
 
 
 def normalize_audio(source: pathlib.Path, output: pathlib.Path) -> None:
@@ -514,8 +534,22 @@ def main() -> None:
         if not mp3_path.exists() or mp3_path.stat().st_size < 1024:
             raise khi.KhinsiderError(f"Downloaded track is missing or suspiciously small: {name}")
 
+        source_duration = ffprobe_audio_duration(mp3_path)
         normalize_audio(mp3_path, normalized_path)
-        item["duration"] = ffprobe_duration(normalized_path)
+        normalized_duration = ffprobe_audio_duration(normalized_path)
+
+        # Transcoding should not materially change the track length. Abort rather
+        # than uploading bad chapters if either source or normalized timing is odd.
+        duration_delta = abs(normalized_duration - source_duration)
+        duration_tolerance = max(2.0, source_duration * 0.01)
+        if duration_delta > duration_tolerance:
+            raise RuntimeError(
+                f"Duration sanity check failed for {name!r}: source="
+                f"{format_timestamp(source_duration)}, normalized="
+                f"{format_timestamp(normalized_duration)}."
+            )
+
+        item["duration"] = normalized_duration
         item["resolved_track_url"] = resolved_track_url
         item["audio_url"] = audio_url
         normalized_paths.append(normalized_path)
@@ -545,6 +579,15 @@ def main() -> None:
     print("Rendering full-album video.")
     render_album_video(combined_audio, video_frame_path, video_path)
     print(f"Rendered: {video_path}")
+
+    rendered_duration = ffprobe_audio_duration(video_path)
+    rendered_delta = abs(rendered_duration - total_duration)
+    if rendered_delta > 2.0:
+        raise RuntimeError(
+            "Final video duration does not match generated chapter timing: "
+            f"chapters={format_timestamp(total_duration)}, "
+            f"video={format_timestamp(rendered_duration)}. Refusing to upload."
+        )
 
     description = build_description(youtube_title, resolved_album_url, chapter_lines)
 
