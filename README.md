@@ -13,7 +13,7 @@ Only upload audio and artwork that you own or have permission to republish. This
 
 ## Disclaimer
 
-This project was largely vibecoded so take everything with a grain of salt. I have confirmed that these work but audit the code if you have any qualms about running AI generated scripts on your personal machine.
+This project was largely vibecoded so take everything with a grain of salt. I have confirmed that these work but audit the code if you have any qualms about running AI generated scripts on your personal machine. All AI generated code was written by a local LLM running on my own hardware.
 ## Features
 
 ### Single-track uploader
