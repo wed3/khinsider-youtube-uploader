@@ -50,7 +50,7 @@ ffmpeg
 ffprobe
 ```
 
-On Arch Linux / CachyOS:
+On Arch Linux
 
 ```bash
 sudo pacman -S ffmpeg python-virtualenv
